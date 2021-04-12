@@ -1,0 +1,10 @@
+--style=allman
+--indent=spaces=4
+--indent-switches
+--indent-preproc-block
+--indent-col1-comments
+--unpad-paren
+--pad-oper
+--pad-header
+--align-pointer=type
+--remove-braces
