@@ -155,14 +155,10 @@ static inline uint8_t zeropage(cpu* c, uint8_t address)
     return c->ram[address];
 }
 
-static inline uint8_t absoluteX(cpu* c, uint16_t address)
+static inline uint8_t zeropageX_address(cpu* c, uint8_t address)
 {
-    return c->ram[address + c->xr];
-}
-
-static inline uint8_t absoluteY(cpu* c, uint16_t address)
-{
-    return c->ram[address + c->yr];
+    uint8_t zero_address = address + c->xr;
+    return zero_address;
 }
 
 static inline uint8_t zeropageX(cpu* c, uint8_t address)
@@ -171,18 +167,16 @@ static inline uint8_t zeropageX(cpu* c, uint8_t address)
     return c->ram[zero_address];
 }
 
+static inline uint8_t zeropageY_address(cpu* c, uint8_t address)
+{
+    uint8_t zero_address = address + c->yr;
+    return zero_address;
+}
+
 static inline uint8_t zeropageY(cpu* c, uint8_t address)
 {
     uint8_t zero_address = address + c->yr;
     return c->ram[zero_address];
-}
-
-static uint8_t indirectX(cpu* c, uint8_t address)
-{
-    uint8_t zero_address = address + c->xr;
-    uint16_t indirect_address = c->ram[(uint8_t)(zero_address + 1)];
-    indirect_address = (indirect_address << 8) + c->ram[zero_address];
-    return c->ram[indirect_address];
 }
 
 static uint16_t indirectX_address(cpu* c, uint8_t address)
@@ -193,20 +187,44 @@ static uint16_t indirectX_address(cpu* c, uint8_t address)
     return indirect_address;
 }
 
-static uint8_t indirectY(cpu* c, uint8_t address)
+static inline uint8_t indirectX(cpu* c, uint8_t address)
+{
+    return c->ram[indirectX_address(c, address)];
+}
+
+static uint16_t indirectY_address(cpu* c, uint8_t address)
 {
     uint16_t indirect_address = c->ram[(uint8_t)(address + 1)];
     indirect_address = (indirect_address << 8) + c->ram[address] + c->yr;
-    return c->ram[indirect_address];
+    return indirect_address;
 }
+
+static inline uint8_t indirectY(cpu* c, uint8_t address)
+{
+    return c->ram[indirectY_address(c, address)];
+}
+
+static uint16_t indirect(cpu* c, uint16_t address)
+{
+    // Hardware bug in OG 6502
+    uint16_t high = address & 0xFF00;
+    uint8_t low = address;
+    ++low;
+    uint16_t msb_address = high + low;
+
+    // Now for the actual logic;
+    uint16_t indirect_address = c->ram[msb_address];
+    indirect_address <<= 8;
+    indirect_address += c->ram[address];
+    return indirect_address;
+}
+
 
 ////////////////////////////////////////
 // Instructions
 
 static void ADC(cpu* c, uint8_t value)
 {
-    // Keep the 'sign' (bit 7), so we can check later a signed overflow occurred.
-    uint8_t const sign = (c->acc >> 6) % 2;
     // Keep the original value, so we can check later whether we need to carry.
     uint8_t const original_acc = c->acc;
 
@@ -808,8 +826,23 @@ static void decode(cpu* c, uint8_t op)
         case (0x11):
             ORA(c, indirectY(c, fetch(c)));
             break;
+        case (0x15):
+            ORA(c, zeropageX(c, fetch(c)));
+            break;
+        case (0x16):
+            ASL(c, zeropageX_address(c, fetch(c)));
+            break;
         case (0x18):
             CLC(c);
+            break;
+        case (0x19):
+            ORA(c, absolute(c, fetch2(c) + c->yr));
+            break;
+        case (0x1D):
+            ORA(c, absolute(c, fetch2(c) + c->xr));
+            break;
+        case (0x1E):
+            ASL(c, fetch2(c) + c->xr);
             break;
         case (0x20):
             JSR(c, fetch2(c));
@@ -850,8 +883,23 @@ static void decode(cpu* c, uint8_t op)
         case (0x31):
             AND(c, indirectY(c, fetch(c)));
             break;
+        case (0x35):
+            AND(c, zeropageX(c, fetch(c)));
+            break;
+        case (0x36):
+            ROL(c, zeropageX_address(c, fetch(c)));
+            break;
         case (0x38):
             SEC(c);
+            break;
+        case (0x39):
+            AND(c, absolute(c, fetch2(c) + c->yr));
+            break;
+        case (0x3D):
+            AND(c, absolute(c, fetch2(c) + c->xr));
+            break;
+        case (0x3E):
+            ROL(c, fetch2(c) + c->xr);
             break;
         case (0x40):
             RTI(c);
@@ -886,6 +934,24 @@ static void decode(cpu* c, uint8_t op)
         case (0x50):
             BVC(c, fetch(c));
             break;
+        case (0x51):
+            EOR(c, indirectY(c, fetch(c)));
+            break;
+        case (0x55):
+            EOR(c, zeropageX(c, fetch(c)));
+            break;
+        case (0x56):
+            LSR(c, zeropageX_address(c, fetch(c)));
+            break;
+        case (0x59):
+            EOR(c, absolute(c, fetch2(c) + c->yr));
+            break;
+        case (0x5D):
+            EOR(c, absolute(c, fetch2(c) + c->xr));
+            break;
+        case (0x5E):
+            LSR(c, fetch2(c) + c->xr);
+            break;
         case (0x60):
             RTS(c);
             break;
@@ -907,6 +973,9 @@ static void decode(cpu* c, uint8_t op)
         case (0x6A):
             ROR_acc(c);
             break;
+        case (0x6C):
+            JMP(c, indirect(c, fetch2(c)));
+            break;
         case (0x6D):
             ADC(c, absolute(c, fetch2(c)));
             break;
@@ -916,8 +985,26 @@ static void decode(cpu* c, uint8_t op)
         case (0x70):
             BVS(c, fetch(c));
             break;
+        case (0x71):
+            ADC(c, indirectY(c, fetch(c)));
+            break;
+        case (0x75):
+            ADC(c, zeropageX(c, fetch(c)));
+            break;
+        case (0x76):
+            ROR(c, zeropageX_address(c, fetch(c)));
+            break;
         case (0x78):
             SEI(c);
+            break;
+        case (0x79):
+            ADC(c, absolute(c, fetch2(c) + c->yr));
+            break;
+        case (0x7D):
+            ADC(c, absolute(c, fetch2(c) + c->xr));
+            break;
+        case (0x7E):
+            ROR(c, fetch2(c) + c->xr);
             break;
         case (0x81):
             STA(c, indirectX_address(c, fetch(c)));
@@ -949,14 +1036,32 @@ static void decode(cpu* c, uint8_t op)
         case (0x90):
             BCC(c, fetch(c));
             break;
+        case (0x91):
+            STA(c, indirectY_address(c, fetch(c)));
+            break;
+        case (0x94):
+            STY(c, zeropageX_address(c, fetch(c)));
+            break;
+        case (0x95):
+            STA(c, zeropageX_address(c, fetch(c)));
+            break;
+        case (0x96):
+            STX(c, zeropageY_address(c, fetch(c)));
+            break;
         case (0x98):
             TYA(c);
+            break;
+        case (0x99):
+            STA(c, fetch2(c) + c->yr);
             break;
         case (0x9A):
             TXS(c);
             break;
         case (0xA0):
             LDY(c, fetch(c));
+            break;
+        case (0x9D):
+            STA(c, fetch2(c) + c->xr);
             break;
         case (0xA1):
             LDA(c, indirectX(c, fetch(c)));
@@ -997,11 +1102,32 @@ static void decode(cpu* c, uint8_t op)
         case (0xB1):
             LDA(c, indirectY(c, fetch(c)));
             break;
+        case (0xB4):
+            LDY(c, zeropageX(c, fetch(c)));
+            break;
+        case (0xB5):
+            LDA(c, zeropageX(c, fetch(c)));
+            break;
+        case (0xB6):
+            LDX(c, zeropageY(c, fetch(c)));
+            break;
         case (0xB8):
             CLV(c);
             break;
+        case (0xB9):
+            LDA(c, absolute(c, fetch2(c) + c->yr));
+            break;
         case (0xBA):
             TSX(c);
+            break;
+        case (0xBC):
+            LDY(c, absolute(c, fetch2(c) + c->xr));
+            break;
+        case (0xBD):
+            LDA(c, absolute(c, fetch2(c) + c->xr));
+            break;
+        case (0xBE):
+            LDX(c, absolute(c, fetch2(c) + c->yr));
             break;
         case (0xC0):
             CPY(c, fetch(c));
@@ -1039,8 +1165,26 @@ static void decode(cpu* c, uint8_t op)
         case (0xD0):
             BNE(c, fetch(c));
             break;
+        case (0xD1):
+            CMP(c, indirectY(c, fetch(c)));
+            break;
+        case (0xD5):
+            CMP(c, zeropageX(c, fetch(c)));
+            break;
+        case (0xD6):
+            DEC(c, zeropageX_address(c, fetch(c)));
+            break;
         case (0xD8):
             CLD(c);
+            break;
+        case (0xD9):
+            CMP(c, absolute(c, fetch2(c) + c->yr));
+            break;
+        case (0xDD):
+            CMP(c, absolute(c, fetch2(c) + c->xr));
+            break;
+        case (0xDE):
+            DEC(c, fetch2(c) + c->xr);
             break;
         case (0xE0):
             CPX(c, fetch(c));
@@ -1078,8 +1222,26 @@ static void decode(cpu* c, uint8_t op)
         case (0xF0):
             BEQ(c, fetch(c));
             break;
+        case (0xF1):
+            SBC(c, indirectY(c, fetch(c)));
+            break;
+        case (0xF5):
+            SBC(c, zeropageX(c, fetch(c)));
+            break;
+        case (0xF6):
+            INC(c, zeropageX_address(c, fetch(c)));
+            break;
         case (0xF8):
             SED(c);
+            break;
+        case (0xF9):
+            SBC(c, absolute(c, fetch2(c) + c->yr));
+            break;
+        case (0xFD):
+            SBC(c, absolute(c, fetch2(c) + c->xr));
+            break;
+        case (0xFE):
+            INC(c, fetch2(c) + c->xr);
             break;
         default:
             unimplemented(op);
