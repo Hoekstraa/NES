@@ -180,16 +180,24 @@ static inline uint8_t zeropageY(cpu* c, uint8_t address)
 static uint8_t indirectX(cpu* c, uint8_t address)
 {
     uint8_t zero_address = address + c->xr;
-    uint16_t indirect_address = c->ram[zero_address + 1];
+    uint16_t indirect_address = c->ram[(uint8_t)(zero_address + 1)];
     indirect_address = (indirect_address << 8) + c->ram[zero_address];
     return c->ram[indirect_address];
 }
 
+static uint16_t indirectX_address(cpu* c, uint8_t address)
+{
+    uint8_t zero_address = address + c->xr;
+    uint16_t indirect_address = c->ram[(uint8_t)(zero_address + 1)];
+    indirect_address = (indirect_address << 8) + c->ram[zero_address];
+    return indirect_address;
+}
+
 static uint8_t indirectY(cpu* c, uint8_t address)
 {
-    uint16_t indirect_address = c->ram[address + 1];
-    indirect_address = (indirect_address << 8) + c->ram[address];
-    return c->ram[indirect_address + c->yr];
+    uint16_t indirect_address = c->ram[(uint8_t)(address + 1)];
+    indirect_address = (indirect_address << 8) + c->ram[address] + c->yr;
+    return c->ram[indirect_address];
 }
 
 ////////////////////////////////////////
@@ -211,7 +219,7 @@ static void ADC(cpu* c, uint8_t value)
     c->zflag = c->acc == 0;
     // If the sign changed, the overflow should turn on, otherwise off.
     // Taken from  https://forums.nesdev.com/viewtopic.php?f=3&t=6331
-    c->vflag = ((original_acc ^ c->acc) & (value ^ c->acc) & (uint8_t)0x80) ? 1 : 0;
+    c->vflag = !!((original_acc ^ c->acc) & (value ^ c->acc) & (uint8_t)0x80);
     // If the sign is set, the negative flag should be set, otherwise unset.
     c->nflag = c->acc >> 7;
 }
@@ -490,10 +498,10 @@ static void LDY(cpu* c, uint8_t value)
     c->nflag = value >> 7;
 }
 
-static void LSR_acc(cpu* c, uint8_t value)
+static void LSR_acc(cpu* c)
 {
     // Set carry to right-most bit
-    c->cflag = c->acc % 2;
+    c->cflag = c->acc & 1;
 
     // Shift right
     c->acc >>= 1;
@@ -504,10 +512,10 @@ static void LSR_acc(cpu* c, uint8_t value)
     c->nflag = c->acc >> 7;
 }
 
-static void LSR(cpu* c, uint8_t value, uint16_t address)
+static void LSR(cpu* c, uint16_t address)
 {
     // Set carry to right-most bit
-    c->cflag = c->ram[address] % 2;
+    c->cflag = c->ram[address] & 1;
 
     // Shift right
     c->ram[address] >>= 1;
@@ -627,6 +635,24 @@ static void ROR(cpu* c, uint16_t address)
     c->zflag = c->ram[address] == 0;
     // If the sign is set, the negative flag should be set, otherwise unset.
     c->nflag = c->ram[address] >> 7;
+}
+
+// Return from interrupt: load status and PC from stack.
+static void RTI(cpu* c)
+{
+
+    uint8_t status = c->ram[0x100 + ++(c->stackreg)];
+    c->nflag = (status >> 7) % 2;
+    c->vflag = (status >> 6) % 2;
+    c->dflag = (status >> 3) % 2;
+    c->iflag = (status >> 2) % 2;
+    c->zflag = (status >> 1) % 2;
+    c->cflag = status % 2;
+
+    uint8_t low_byte = c->ram[0x100 + ++(c->stackreg)];
+    uint8_t high_byte = c->ram[0x100 + ++(c->stackreg)];
+    uint16_t address = (high_byte << 8) + low_byte;
+    c->programcounter = address;
 }
 
 static void RTS(cpu* c)
@@ -771,10 +797,10 @@ static void decode(cpu* c, uint8_t op)
             ASL_acc(c);
             break;
         case (0x0D):
-            ORA(c, absolute(c, fetch(c)));
+            ORA(c, absolute(c, fetch2(c)));
             break;
         case (0x0E):
-            ASL(c, absolute(c, fetch(c)));
+            ASL(c, fetch2(c));
             break;
         case (0x10):
             BPL(c, fetch(c));
@@ -788,8 +814,17 @@ static void decode(cpu* c, uint8_t op)
         case (0x20):
             JSR(c, fetch2(c));
             break;
+        case (0x21):
+            AND(c, indirectX(c, fetch(c)));
+            break;
         case (0x24):
             BIT(c, zeropage(c, fetch(c)));
+            break;
+        case (0x25):
+            AND(c, zeropage(c, fetch(c)));
+            break;
+        case (0x26):
+            ROL(c, fetch(c));
             break;
         case (0x28):
             PLP(c);
@@ -797,17 +832,38 @@ static void decode(cpu* c, uint8_t op)
         case (0x29):
             AND(c, fetch(c));
             break;
+        case (0x2A):
+            ROL_acc(c);
+            break;
         case (0x2C):
             BIT(c, absolute(c, fetch2(c)));
             break;
         case (0x2D):
             AND(c, absolute(c, fetch2(c)));
             break;
+        case (0x2E):
+            ROL(c, fetch2(c));
+            break;
         case (0x30):
             BMI(c, fetch(c));
             break;
+        case (0x31):
+            AND(c, indirectY(c, fetch(c)));
+            break;
         case (0x38):
             SEC(c);
+            break;
+        case (0x40):
+            RTI(c);
+            break;
+        case (0x41):
+            EOR(c, indirectX(c, fetch(c)));
+            break;
+        case (0x45):
+            EOR(c, zeropage(c, fetch(c)));
+            break;
+        case (0x46):
+            LSR(c, fetch(c));
             break;
         case (0x48):
             PHA(c);
@@ -815,8 +871,17 @@ static void decode(cpu* c, uint8_t op)
         case (0x49):
             EOR(c, fetch(c));
             break;
+        case (0x4A):
+            LSR_acc(c);
+            break;
         case (0x4C):
             JMP(c, fetch2(c));
+            break;
+        case (0x4D):
+            EOR(c, absolute(c, fetch2(c)));
+            break;
+        case (0x4E):
+            LSR(c, fetch2(c));
             break;
         case (0x50):
             BVC(c, fetch(c));
@@ -824,17 +889,38 @@ static void decode(cpu* c, uint8_t op)
         case (0x60):
             RTS(c);
             break;
+        case (0x61):
+            ADC(c, indirectX(c, fetch(c)));
+            break;
+        case (0x65):
+            ADC(c, zeropage(c, fetch(c)));
+            break;
+        case (0x66):
+            ROR(c, fetch(c));
+            break;
         case (0x68):
             PLA(c);
             break;
         case (0x69):
             ADC(c, fetch(c));
             break;
+        case (0x6A):
+            ROR_acc(c);
+            break;
+        case (0x6D):
+            ADC(c, absolute(c, fetch2(c)));
+            break;
+        case (0x6E):
+            ROR(c, fetch2(c));
+            break;
         case (0x70):
             BVS(c, fetch(c));
             break;
         case (0x78):
             SEI(c);
+            break;
+        case (0x81):
+            STA(c, indirectX_address(c, fetch(c)));
             break;
         case (0x84):
             STY(c, fetch(c));
@@ -851,6 +937,12 @@ static void decode(cpu* c, uint8_t op)
         case (0x8A):
             TXA(c);
             break;
+        case (0x8C):
+            STY(c, fetch2(c));
+            break;
+        case (0x8D):
+            STA(c, fetch2(c));
+            break;
         case (0x8E):
             STX(c, fetch2(c));
             break;
@@ -866,8 +958,20 @@ static void decode(cpu* c, uint8_t op)
         case (0xA0):
             LDY(c, fetch(c));
             break;
+        case (0xA1):
+            LDA(c, indirectX(c, fetch(c)));
+            break;
         case (0xA2):
             LDX(c, fetch(c));
+            break;
+        case (0xA4):
+            LDY(c, zeropage(c, fetch(c)));
+            break;
+        case (0xA5):
+            LDA(c, zeropage(c, fetch(c)));
+            break;
+        case (0xA6):
+            LDX(c, zeropage(c, fetch(c)));
             break;
         case (0xA8):
             TAY(c);
@@ -878,6 +982,9 @@ static void decode(cpu* c, uint8_t op)
         case (0xAA):
             TAX(c);
             break;
+        case (0xAC):
+            LDY(c, absolute(c, fetch2(c)));
+            break;
         case (0xAD):
             LDA(c, absolute(c, fetch2(c)));
             break;
@@ -886,6 +993,9 @@ static void decode(cpu* c, uint8_t op)
             break;
         case (0xB0):
             BCS(c, fetch(c));
+            break;
+        case (0xB1):
+            LDA(c, indirectY(c, fetch(c)));
             break;
         case (0xB8):
             CLV(c);
@@ -896,6 +1006,18 @@ static void decode(cpu* c, uint8_t op)
         case (0xC0):
             CPY(c, fetch(c));
             break;
+        case (0xC1):
+            CMP(c, indirectX(c, fetch(c)));
+            break;
+        case (0xC4):
+            CPY(c, zeropage(c, fetch(c)));
+            break;
+        case (0xC5):
+            CMP(c, zeropage(c, fetch(c)));
+            break;
+        case (0xC6):
+            DEC(c, fetch(c));
+            break;
         case (0xC8):
             INY(c);
             break;
@@ -904,6 +1026,15 @@ static void decode(cpu* c, uint8_t op)
             break;
         case (0xCA):
             DEX(c);
+            break;
+        case (0xCC):
+            CPY(c, absolute(c, fetch2(c)));
+            break;
+        case (0xCD):
+            CMP(c, absolute(c, fetch2(c)));
+            break;
+        case (0xCE):
+            DEC(c, fetch2(c));
             break;
         case (0xD0):
             BNE(c, fetch(c));
@@ -914,6 +1045,18 @@ static void decode(cpu* c, uint8_t op)
         case (0xE0):
             CPX(c, fetch(c));
             break;
+        case (0xE1):
+            SBC(c, indirectX(c, fetch(c)));
+            break;
+        case (0xE4):
+            CPX(c, zeropage(c, fetch(c)));
+            break;
+        case (0xE5):
+            SBC(c, zeropage(c, fetch(c)));
+            break;
+        case (0xE6):
+            INC(c, fetch(c));
+            break;
         case (0xE8):
             INX(c);
             break;
@@ -922,6 +1065,15 @@ static void decode(cpu* c, uint8_t op)
             break;
         case (0xEA):
             NOP(c);
+            break;
+        case (0xEC):
+            CPX(c, absolute(c, fetch2(c)));
+            break;
+        case (0xED):
+            SBC(c, absolute(c, fetch2(c)));
+            break;
+        case (0xEE):
+            INC(c, fetch2(c));
             break;
         case (0xF0):
             BEQ(c, fetch(c));
@@ -934,6 +1086,7 @@ static void decode(cpu* c, uint8_t op)
     }
 }
 
+// Execute one instruction
 void execute(cpu* c)
 {
     decode(c, fetch(c));

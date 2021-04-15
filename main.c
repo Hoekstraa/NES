@@ -62,7 +62,7 @@ int main(int argc, char** argv)
 {
     if (argc < 3 || argc > 3)
     {
-        printf("Please run this command as follows: %s [runtype] [programname]\n", argv[0]);
+        printf("Please run this command as follows: %s [runtype] [programname]\nRuntypes: step, steplog, stacklog, log, run\n", argv[0]);
         return 1;
     }
 
